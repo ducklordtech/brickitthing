@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BrickBuilder MVP</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f4; text-align: center; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        .controls { margin: 20px 0; padding: 20px; background: #eee; border-radius: 8px; }
+        button { background-color: #ffcf00; border: none; padding: 10px 20px; font-weight: bold; cursor: pointer; border-radius: 5px; color: #333; margin-top: 10px; }
+        button:hover { background-color: #e5b900; }
+        canvas { border: 2px solid #333; margin-top: 20px; max-width: 100%; image-rendering: pixelated; }
+        .stats { margin-top: 20px; font-family: monospace; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🧱 AI Brick Generator</h1>
+    <p>Upload an image to turn it into a brick mosaic.</p>
+
+    <div class="controls">
+        <input type="file" id="upload" accept="image/*"><br><br>
+        <label>Width (in studs): <input type="number" id="width" value="48" min="16" max="150"></label><br>
+        <button onclick="processImage()">Generate Build</button>
+    </div>
+
+    <canvas id="previewCanvas"></canvas>
+    <div id="stats" class="stats"></div>
+    <button id="downloadBtn" class="hidden" onclick="downloadXML()">Download BrickLink XML</button>
+</div>
+
+<script>
+    // 1. THE LEGO COLOR PALETTE (Standard Solid Colors)
+    // ID reference: BrickLink Color IDs
+    const legoColors = [
+        { id: 1, name: "White", r: 255, g: 255, b: 255 },
+        { id: 5, name: "Red", r: 200, g: 50, b: 50 },
+        { id: 7, name: "Blue", r: 0, g: 85, b: 191 },
+        { id: 3, name: "Yellow", r: 255, g: 205, b: 3 },
+        { id: 11, name: "Black", r: 27, g: 42, b: 52 },
+        { id: 6, name: "Green", r: 35, g: 120, b: 65 },
+        { id: 85, name: "Dark Bluish Gray", r: 108, g: 110, b: 104 },
+        { id: 86, name: "Light Bluish Gray", r: 160, g: 165, b: 169 },
+        { id: 88, name: "Reddish Brown", r: 88, g: 42, b: 20 },
+        { id: 4, name: "Orange", r: 254, g: 138, b: 24 }
+    ];
+
+    let currentParts = {}; // Stores the Bill of Materials
+
+    function findClosestColor(r, g, b) {
+        let minDist = Infinity;
+        let closest = legoColors[0];
+
+        legoColors.forEach(color => {
+            // Euclidean distance
+            let dist = Math.sqrt(
+                Math.pow(r - color.r, 2) + 
+                Math.pow(g - color.g, 2) + 
+                Math.pow(b - color.b, 2)
+            );
+            if (dist < minDist) {
+                minDist = dist;
+                closest = color;
+            }
+        });
+        return closest;
+    }
+
+    function processImage() {
+        const fileInput = document.getElementById('upload');
+        const widthInput = document.getElementById('width').value;
+        const canvas = document.getElementById('previewCanvas');
+        const ctx = canvas.getContext('2d');
+
+        if (!fileInput.files[0]) { alert("Please upload an image first!"); return; }
+
+        const img = new Image();
+        img.src = URL.createObjectURL(fileInput.files[0]);
+        
+        img.onload = function() {
+            // Calculate Aspect Ratio
+            const aspectRatio = img.height / img.width;
+            const newWidth = parseInt(widthInput);
+            const newHeight = Math.floor(newWidth * aspectRatio);
+
+            // Resize Canvas to "Stud" resolution
+            canvas.width = newWidth;
+            canvas.height = newHeight;
+
+            // Draw original image downscaled
+            ctx.drawImage(img, 0, 0, newWidth, newHeight);
+
+            // Get pixel data
+            const imgData = ctx.getImageData(0, 0, newWidth, newHeight);
+            const data = imgData.data;
+
+            currentParts = {}; // Reset BOM
+
+            // Loop through every pixel and replace with LEGO color
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i+1];
+                const b = data[i+2];
+
+                const match = findClosestColor(r, g, b);
+
+                // Update pixel to Lego color
+                data[i] = match.r;
+                data[i+1] = match.g;
+                data[i+2] = match.b;
+
+                // Add to Bill of Materials
+                if (currentParts[match.name]) {
+                    currentParts[match.name].count++;
+                } else {
+                    currentParts[match.name] = { count: 1, id: match.id };
+                }
+            }
+
+            // Put processed data back on canvas
+            ctx.putImageData(imgData, 0, 0);
+            
+            // Show stats
+            displayStats(newWidth, newHeight);
+            document.getElementById('downloadBtn').classList.remove('hidden');
+        };
+    }
+
+    function displayStats(w, h) {
+        const totalBricks = w * h;
+        const costEstimate = (totalBricks * 0.10).toFixed(2); // Avg 10 cents per brick
+        
+        let html = `<h3>Build Stats</h3>`;
+        html += `<p><strong>Size:</strong> ${w} x ${h} studs (${(w*0.8).toFixed(1)}cm wide)</p>`;
+        html += `<p><strong>Total Parts:</strong> ${totalBricks}</p>`;
+        html += `<p><strong>Est. Cost:</strong> $${costEstimate} (via Pick a Brick)</p>`;
+        document.getElementById('stats').innerHTML = html;
+    }
+
+    function downloadXML() {
+        // Generate BrickLink XML format
+        let xml = '<INVENTORY>\n';
+        for (const [name, data] of Object.entries(currentParts)) {
+            xml += ' <ITEM>\n';
+            xml += '  <ITEMTYPE>P</ITEMTYPE>\n';
+            xml += '  <ITEMID>3024</ITEMID>\n'; // 3024 is the ID for a 1x1 Plate
+            xml += `  <COLOR>${data.id}</COLOR>\n`;
+            xml += `  <MINQTY>${data.count}</MINQTY>\n`;
+            xml += ' </ITEM>\n';
+        }
+        xml += '</INVENTORY>';
+
+        const blob = new Blob([xml], { type: "text/xml" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "bricklink_bom.xml";
+        a.click();
+    }
+</script>
+
+</body>
+</html>
